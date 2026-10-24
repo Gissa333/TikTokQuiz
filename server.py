@@ -2,12 +2,55 @@ import asyncio
 import websockets
 import json
 import os
+import requests
+import html
 from tiktok_live_events import TikTokLive
+from aiohttp import web
 
-# قراءة الأسئلة
-with open('questions.json', 'r', encoding='utf-8') as f:
-    QUESTIONS = json.load(f)
+# دالة لجلب الأسئلة من Open Trivia Database
+def fetch_questions():
+    # الفئة 17 هي "Science & Nature"، الكمية 10، النوع متعدد الخيارات
+    url = "https://opentdb.com/api.php?amount=10&category=17&type=multiple"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if data['response_code'] == 0:
+            questions = []
+            for item in data['results']:
+                # فك تشفير النصوص (لأن OpenTDB ترجع رموز HTML)
+                q_text = html.unescape(item['question'])
+                correct = html.unescape(item['correct_answer'])
+                incorrect = [html.unescape(ans) for ans in item['incorrect_answers']]
+                
+                # دمج الإجابات الخاطئة والصحيحة وخلطها
+                all_answers = incorrect + [correct]
+                import random
+                random.shuffle(all_answers)
+                
+                # تحديد الحرف الصحيح (A, B, C, D)
+                correct_index = all_answers.index(correct)
+                correct_letter = ["A", "B", "C", "D"][correct_index]
+                
+                # تنسيق الخيارات
+                opts = [f"A) {all_answers[0]}", f"B) {all_answers[1]}", f"C) {all_answers[2]}", f"D) {all_answers[3]}"]
+                
+                questions.append({
+                    "q": q_text,
+                    "opts": opts,
+                    "ans": correct_letter
+                })
+            return questions
+    except Exception as e:
+        print(f"Error fetching questions: {e}")
+    
+    # في حال فشل الاتصال، نرجع لأسئلة احتياطية
+    return [
+        {"q": "ما هي عاصمة فرنسا؟", "opts": ["A) لندن", "B) باريس", "C) روما", "D) مدريد"], "ans": "B"},
+        {"q": "ما هو أكبر كوكب في المجموعة الشمسية؟", "opts": ["A) الأرض", "B) المريخ", "C) المشتري", "D) زحل"], "ans": "C"}
+    ]
 
+QUESTIONS = fetch_questions()
 current_q_index = 0
 clients = set()
 main_loop = None
@@ -66,33 +109,41 @@ def on_chat(e):
         
         asyncio.run_coroutine_threadsafe(next_q(), main_loop)
 
-async def handler(websocket):
-    global main_loop, timer_task
-    clients.add(websocket)
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    clients.add(ws)
     
     if current_q_index < len(QUESTIONS):
         q = QUESTIONS[current_q_index]
-        await websocket.send(json.dumps({"type": "new_question", "question": q["q"], "options": q["opts"]}))
+        await ws.send_str(json.dumps({"type": "new_question", "question": q["q"], "options": q["opts"]}))
         if timer_task is None:
             timer_task = asyncio.create_task(question_timer())
     else:
-        await websocket.send(json.dumps({"type": "end"}))
+        await ws.send_str(json.dumps({"type": "end"}))
         
     try:
-        await asyncio.Future() 
+        async for msg in ws:
+            pass
     except:
-        clients.remove(websocket)
+        clients.remove(ws)
+    return ws
 
 async def main():
     global main_loop
     main_loop = asyncio.get_running_loop()
+    asyncio.create_task(live.run())
     
-    # الاستضافة السحابية تتطلب الاستماع على 0.0.0.0 وليس 127.0.0.1
+    app = web.Application()
+    app.router.add_get('/', websocket_handler)
+    
     port = int(os.environ.get("PORT", 10000))
-    async with websockets.serve(handler, "0.0.0.0", port):
-        print(f"🚀 الخادم جاهز على المنفذ {port}")
-        asyncio.create_task(live.run())
-        await asyncio.Future()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🚀 الخادم جاهز على المنفذ {port} مع أسئلة علمية أونلاين")
+    await asyncio.Future()
 
 if __name__ == "__main__":
     asyncio.run(main())
