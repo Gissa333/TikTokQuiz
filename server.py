@@ -7,31 +7,49 @@ import html
 import random
 from tiktok_live_events import TikTokLive
 from aiohttp import web
+from deep_translator import GoogleTranslator
 
+# دالة لجلب الأسئلة وترجمتها
 def fetch_questions():
     url = "https://opentdb.com/api.php?amount=10&category=17&type=multiple"
+    questions = []
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
         if data['response_code'] == 0:
-            questions = []
+            translator = GoogleTranslator(source='en', target='ar')
             for item in data['results']:
                 q_text = html.unescape(item['question'])
                 correct = html.unescape(item['correct_answer'])
                 incorrect = [html.unescape(ans) for ans in item['incorrect_answers']]
-                all_answers = incorrect + [correct]
+                
+                # ترجمة النصوص إلى العربية
+                try:
+                    q_text_ar = translator.translate(q_text)
+                    correct_ar = translator.translate(correct)
+                    incorrect_ar = [translator.translate(ans) for ans in incorrect]
+                except:
+                    q_text_ar = q_text
+                    correct_ar = correct
+                    incorrect_ar = incorrect
+                
+                all_answers = incorrect_ar + [correct_ar]
                 random.shuffle(all_answers)
-                correct_index = all_answers.index(correct)
+                correct_index = all_answers.index(correct_ar)
                 correct_letter = ["A", "B", "C", "D"][correct_index]
+                
                 opts = [f"A) {all_answers[0]}", f"B) {all_answers[1]}", f"C) {all_answers[2]}", f"D) {all_answers[3]}"]
-                questions.append({"q": q_text, "opts": opts, "ans": correct_letter})
+                questions.append({"q": q_text_ar, "opts": opts, "ans": correct_letter})
             return questions
     except Exception as e:
         print(f"Error fetching questions: {e}")
+    
+    # أسئلة احتياطية في حال فشل الاتصال
     return [
         {"q": "ما هي عاصمة فرنسا؟", "opts": ["A) لندن", "B) باريس", "C) روما", "D) مدريد"], "ans": "B"}
     ]
 
+# جلب أول دفعة من الأسئلة
 QUESTIONS = fetch_questions()
 current_q_index = 0
 clients = set()
@@ -50,12 +68,18 @@ async def question_timer():
         await next_q()
 
 async def next_q():
-    global current_q_index, winner_found, timer_task
+    global current_q_index, winner_found, timer_task, QUESTIONS
     winner_found = False
     current_q_index += 1
     await asyncio.sleep(3)
     
-    if current_q_index < len(QUESTIONS):
+    # إذا انتهت الأسئلة، نجلب أسئلة جديدة تلقائياً
+    if current_q_index >= len(QUESTIONS):
+        print("🔄 جلب دفعة جديدة من الأسئلة...")
+        QUESTIONS = fetch_questions()
+        current_q_index = 0
+        
+    if len(QUESTIONS) > 0:
         new_q = QUESTIONS[current_q_index]
         q_json = json.dumps({"type": "new_question", "question": new_q["q"], "options": new_q["opts"]})
         for ws in clients.copy():
@@ -115,7 +139,6 @@ async def websocket_handler(request):
             if msg.type == web.WSMsgType.TEXT:
                 data = json.loads(msg.data)
                 if data.get("type") == "app_answer":
-                    # هنا التعديل: استخدام create_task لمعالجة الإجابة فوراً
                     asyncio.create_task(process_answer(data.get("user"), data.get("answer")))
     except:
         pass
@@ -136,7 +159,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 الخادم جاهز على المنفذ {port} مع معالجة فورية للإجابات")
+    print(f"🚀 الخادم جاهز على المنفذ {port} مع الترجمة والجلب اللانهائي")
     await asyncio.Future()
 
 if __name__ == "__main__":
