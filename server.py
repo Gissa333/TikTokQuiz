@@ -8,23 +8,8 @@ import random
 from tiktok_live_events import TikTokLive
 from aiohttp import web
 
-# دالة لجلب الأسئلة من مصدر عربي مباشر (بدون ترجمة)
 def fetch_questions():
-    # استخدام واجهة برمجية عربية مفتوحة للأسئلة
-    url = "https://opentdb.com/api.php?amount=10&category=17&type=multiple"
-    questions = []
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if data['response_code'] == 0:
-            for item in data['results']:
-                # نستخدم النص الإنجليزي كما هو، ولكننا سنضيف قاموس ترجمة يدوي للأسئلة الشائعة
-                # أو نستخدم أسئلة عربية مبرمجة مسبقاً لتجنب مشاكل الترجمة
-                pass
-    except Exception as e:
-        print(f"Error: {e}")
-    
-    # قائمة أسئلة عربية جاهزة ومضمونة (يمكنك إضافة المزيد هنا)
+    # قائمة أسئلة عربية جاهزة
     arabic_questions = [
         {"q": "ما هي عاصمة المملكة العربية السعودية؟", "opts": ["A) جدة", "B) الرياض", "C) مكة", "D) الدمام"], "ans": "B"},
         {"q": "كم عدد أركان الإسلام؟", "opts": ["A) 3", "B) 4", "C) 5", "D) 6"], "ans": "C"},
@@ -37,8 +22,6 @@ def fetch_questions():
         {"q": "ما هو أقسى مادة طبيعية على وجه الأرض؟", "opts": ["A) الحديد", "B) الألماس", "C) الذهب", "D) الجرانيت"], "ans": "B"},
         {"q": "ما هي العملة الرسمية في اليابان؟", "opts": ["A) اليوان", "B) الوون", "C) الين", "D) الروبية"], "ans": "C"}
     ]
-    
-    # خلط الأسئلة وإرجاعها
     random.shuffle(arabic_questions)
     return arabic_questions
 
@@ -65,7 +48,6 @@ async def next_q():
     current_q_index += 1
     await asyncio.sleep(3)
     
-    # إذا انتهت الأسئلة، نعيد خلطها ونبدأ من جديد
     if current_q_index >= len(QUESTIONS):
         print("🔄 إعادة خلط الأسئلة...")
         random.shuffle(QUESTIONS)
@@ -90,7 +72,8 @@ async def process_answer(user_name, answer):
         return
         
     current_ans = QUESTIONS[current_q_index]["ans"]
-    if answer == current_ans:
+    # التحقق من الإجابة (سواء من الأزرار أو التعليقات)
+    if answer.strip().upper() == current_ans:
         winner_found = True
         if timer_task:
             main_loop.call_soon_threadsafe(timer_task.cancel)
@@ -110,11 +93,12 @@ async def process_answer(user_name, answer):
 def on_chat(e):
     comment = e['comment'].strip().upper()
     user = e['user'].get('nickname', e['user']['uniqueId'])
+    # إرسال التعليق للتحقق فوراً
     asyncio.run_coroutine_threadsafe(process_answer(user, comment), main_loop)
 
 async def websocket_handler(request):
     global main_loop, timer_task
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=15) # إضافة نبضات حياة لمنع الانقطاع
     await ws.prepare(request)
     clients.add(ws)
     
@@ -151,7 +135,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 الخادم جاهز على المنفذ {port} بأسئلة عربية")
+    print(f"🚀 الخادم جاهز على المنفذ {port} مع نبضات حياة وإعادة اتصال")
     await asyncio.Future()
 
 if __name__ == "__main__":
