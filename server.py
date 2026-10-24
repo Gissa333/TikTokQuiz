@@ -29,8 +29,7 @@ def fetch_questions():
     except Exception as e:
         print(f"Error fetching questions: {e}")
     return [
-        {"q": "ما هي عاصمة فرنسا؟", "opts": ["A) لندن", "B) باريس", "C) روما", "D) مدريد"], "ans": "B"},
-        {"q": "ما هو أكبر كوكب في المجموعة الشمسية؟", "opts": ["A) الأرض", "B) المريخ", "C) المشتري", "D) زحل"], "ans": "C"}
+        {"q": "ما هي عاصمة فرنسا؟", "opts": ["A) لندن", "B) باريس", "C) روما", "D) مدريد"], "ans": "B"}
     ]
 
 QUESTIONS = fetch_questions()
@@ -40,14 +39,14 @@ main_loop = None
 timer_task = None
 winner_found = False
 live = TikTokLive("7_upu")
-scores = {}  # لتخزين نقاط اللاعبين
+scores = {}
 
 async def question_timer():
     global current_q_index, winner_found
     await asyncio.sleep(30)
     if not winner_found:
         for ws in clients.copy():
-            asyncio.run_coroutine_threadsafe(ws.send(json.dumps({"type": "timeout"})), main_loop)
+            asyncio.run_coroutine_threadsafe(ws.send_str(json.dumps({"type": "timeout"})), main_loop)
         await next_q()
 
 async def next_q():
@@ -60,14 +59,14 @@ async def next_q():
         new_q = QUESTIONS[current_q_index]
         q_json = json.dumps({"type": "new_question", "question": new_q["q"], "options": new_q["opts"]})
         for ws in clients.copy():
-            asyncio.run_coroutine_threadsafe(ws.send(q_json), main_loop)
+            asyncio.run_coroutine_threadsafe(ws.send_str(q_json), main_loop)
         
         if timer_task:
             timer_task.cancel()
         timer_task = asyncio.create_task(question_timer())
     else:
         for ws in clients.copy():
-            asyncio.run_coroutine_threadsafe(ws.send(json.dumps({"type": "end"})), main_loop)
+            asyncio.run_coroutine_threadsafe(ws.send_str(json.dumps({"type": "end"})), main_loop)
 
 async def process_answer(user_name, answer):
     global winner_found
@@ -80,7 +79,6 @@ async def process_answer(user_name, answer):
         if timer_task:
             main_loop.call_soon_threadsafe(timer_task.cancel)
             
-        # إضافة النقاط
         scores[user_name] = scores.get(user_name, 0) + 10
         current_score = scores[user_name]
         
@@ -88,9 +86,9 @@ async def process_answer(user_name, answer):
         
         msg_json = json.dumps({"type": "winner", "name": winner_msg})
         for ws in clients.copy():
-            asyncio.run_coroutine_threadsafe(ws.send(msg_json), main_loop)
+            asyncio.run_coroutine_threadsafe(ws.send_str(msg_json), main_loop)
         
-        asyncio.run_coroutine_threadsafe(next_q(), main_loop)
+        await next_q()
 
 @live.on('chat')
 def on_chat(e):
@@ -114,10 +112,11 @@ async def websocket_handler(request):
         
     try:
         async for msg in ws:
-            data = json.loads(msg.data)
-            if data.get("type") == "app_answer":
-                # استقبال الإجابة من التطبيق نفسه
-                await process_answer(data.get("user"), data.get("answer"))
+            if msg.type == web.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                if data.get("type") == "app_answer":
+                    # هنا التعديل: استخدام create_task لمعالجة الإجابة فوراً
+                    asyncio.create_task(process_answer(data.get("user"), data.get("answer")))
     except:
         pass
     finally:
@@ -137,7 +136,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 الخادم جاهز على المنفذ {port} مع نظام النقاط")
+    print(f"🚀 الخادم جاهز على المنفذ {port} مع معالجة فورية للإجابات")
     await asyncio.Future()
 
 if __name__ == "__main__":
