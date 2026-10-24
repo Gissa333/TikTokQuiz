@@ -1,2 +1,4 @@
 tiktok-live-events
 websockets
+aiohttp
+requests
