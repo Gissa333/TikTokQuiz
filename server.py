@@ -4,47 +4,30 @@ import json
 import os
 import requests
 import html
+import random
 from tiktok_live_events import TikTokLive
 from aiohttp import web
 
-# دالة لجلب الأسئلة من Open Trivia Database
 def fetch_questions():
-    # الفئة 17 هي "Science & Nature"، الكمية 10، النوع متعدد الخيارات
     url = "https://opentdb.com/api.php?amount=10&category=17&type=multiple"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-        
         if data['response_code'] == 0:
             questions = []
             for item in data['results']:
-                # فك تشفير النصوص (لأن OpenTDB ترجع رموز HTML)
                 q_text = html.unescape(item['question'])
                 correct = html.unescape(item['correct_answer'])
                 incorrect = [html.unescape(ans) for ans in item['incorrect_answers']]
-                
-                # دمج الإجابات الخاطئة والصحيحة وخلطها
                 all_answers = incorrect + [correct]
-                import random
                 random.shuffle(all_answers)
-                
-                # تحديد الحرف الصحيح (A, B, C, D)
                 correct_index = all_answers.index(correct)
                 correct_letter = ["A", "B", "C", "D"][correct_index]
-                
-                # تنسيق الخيارات
                 opts = [f"A) {all_answers[0]}", f"B) {all_answers[1]}", f"C) {all_answers[2]}", f"D) {all_answers[3]}"]
-                
-                questions.append({
-                    "q": q_text,
-                    "opts": opts,
-                    "ans": correct_letter
-                })
+                questions.append({"q": q_text, "opts": opts, "ans": correct_letter})
             return questions
     except Exception as e:
         print(f"Error fetching questions: {e}")
-    
-    # في حال فشل الاتصال، نرجع لأسئلة احتياطية
     return [
         {"q": "ما هي عاصمة فرنسا؟", "opts": ["A) لندن", "B) باريس", "C) روما", "D) مدريد"], "ans": "B"},
         {"q": "ما هو أكبر كوكب في المجموعة الشمسية؟", "opts": ["A) الأرض", "B) المريخ", "C) المشتري", "D) زحل"], "ans": "C"}
@@ -57,6 +40,7 @@ main_loop = None
 timer_task = None
 winner_found = False
 live = TikTokLive("7_upu")
+scores = {}  # لتخزين نقاط اللاعبين
 
 async def question_timer():
     global current_q_index, winner_found
@@ -85,23 +69,22 @@ async def next_q():
         for ws in clients.copy():
             asyncio.run_coroutine_threadsafe(ws.send(json.dumps({"type": "end"})), main_loop)
 
-@live.on('chat')
-def on_chat(e):
+async def process_answer(user_name, answer):
     global winner_found
     if winner_found or current_q_index >= len(QUESTIONS):
-        return 
+        return
         
     current_ans = QUESTIONS[current_q_index]["ans"]
-    comment = e['comment'].strip().upper()
-    
-    if comment == current_ans:
+    if answer == current_ans:
         winner_found = True
         if timer_task:
             main_loop.call_soon_threadsafe(timer_task.cancel)
             
-        user = e['user']['uniqueId']
-        nickname = e['user'].get('nickname', user)
-        winner_msg = f"{nickname} (@{user})"
+        # إضافة النقاط
+        scores[user_name] = scores.get(user_name, 0) + 10
+        current_score = scores[user_name]
+        
+        winner_msg = f"{user_name} | Coins: {current_score} 🪙"
         
         msg_json = json.dumps({"type": "winner", "name": winner_msg})
         for ws in clients.copy():
@@ -109,7 +92,14 @@ def on_chat(e):
         
         asyncio.run_coroutine_threadsafe(next_q(), main_loop)
 
+@live.on('chat')
+def on_chat(e):
+    comment = e['comment'].strip().upper()
+    user = e['user'].get('nickname', e['user']['uniqueId'])
+    asyncio.run_coroutine_threadsafe(process_answer(user, comment), main_loop)
+
 async def websocket_handler(request):
+    global main_loop, timer_task
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     clients.add(ws)
@@ -124,8 +114,13 @@ async def websocket_handler(request):
         
     try:
         async for msg in ws:
-            pass
+            data = json.loads(msg.data)
+            if data.get("type") == "app_answer":
+                # استقبال الإجابة من التطبيق نفسه
+                await process_answer(data.get("user"), data.get("answer"))
     except:
+        pass
+    finally:
         clients.remove(ws)
     return ws
 
@@ -142,7 +137,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 الخادم جاهز على المنفذ {port} مع أسئلة علمية أونلاين")
+    print(f"🚀 الخادم جاهز على المنفذ {port} مع نظام النقاط")
     await asyncio.Future()
 
 if __name__ == "__main__":
