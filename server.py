@@ -8,22 +8,43 @@ import random
 from tiktok_live_events import TikTokLive
 from aiohttp import web
 
+# دالة لجلب الأسئلة العلمية من الإنترنت باللغة العربية
 def fetch_questions():
-    # قائمة أسئلة عربية جاهزة
-    arabic_questions = [
-        {"q": "ما هي عاصمة المملكة العربية السعودية؟", "opts": ["A) جدة", "B) الرياض", "C) مكة", "D) الدمام"], "ans": "B"},
-        {"q": "كم عدد أركان الإسلام؟", "opts": ["A) 3", "B) 4", "C) 5", "D) 6"], "ans": "C"},
-        {"q": "ما هو أطول نهر في العالم؟", "opts": ["A) النيل", "B) الأمازون", "C) المسيسيبي", "D) اليانغتسي"], "ans": "A"},
-        {"q": "ما هو العنصر الكيميائي الذي رمزه O؟", "opts": ["A) الذهب", "B) الأكسجين", "C) الحديد", "D) الكربون"], "ans": "B"},
-        {"q": "في أي عام هبط الإنسان على سطح القمر لأول مرة؟", "opts": ["A) 1965", "B) 1969", "C) 1972", "D) 1959"], "ans": "B"},
-        {"q": "ما هي أكبر قارة في العالم من حيث المساحة؟", "opts": ["A) أفريقيا", "B) أوروبا", "C) آسيا", "D) أمريكا الشمالية"], "ans": "C"},
-        {"q": "ما هو الحيوان الذي يُعرف باسم 'سفينة الصحراء'؟", "opts": ["A) الحصان", "B) الجمل", "C) الفيل", "D) الحمار الوحشي"], "ans": "B"},
-        {"q": "كم عدد ألوان قوس قزح؟", "opts": ["A) 5", "B) 6", "C) 7", "D) 8"], "ans": "C"},
-        {"q": "ما هو أقسى مادة طبيعية على وجه الأرض؟", "opts": ["A) الحديد", "B) الألماس", "C) الذهب", "D) الجرانيت"], "ans": "B"},
-        {"q": "ما هي العملة الرسمية في اليابان؟", "opts": ["A) اليوان", "B) الوون", "C) الين", "D) الروبية"], "ans": "C"}
-    ]
-    random.shuffle(arabic_questions)
-    return arabic_questions
+    # رابط API خارجي يوفر أسئلة متنوعة (نستخدم تصنيف العلوم رقم 17)
+    url = "https://opentdb.com/api.php?amount=10&category=17&type=multiple"
+    questions = []
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if data['response_code'] == 0:
+            for item in data['results']:
+                q_text = html.unescape(item['question'])
+                correct = html.unescape(item['correct_answer'])
+                incorrect = [html.unescape(ans) for ans in item['incorrect_answers']]
+                
+                # بما أن الـ API الإنجليزي لا يدعم العربية، سنستخدم هنا 
+                # خدمة ترجمة مباشرة عبر طلب HTTP (بدون مكتبات معقدة)
+                try:
+                    translate_url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q={q_text}"
+                    trans_res = requests.get(translate_url, timeout=5).json()
+                    q_text_ar = "".join([t[0] for t in trans_res[0]])
+                except:
+                    q_text_ar = q_text # في حال فشل الترجمة نعرضها بالإنجليزية
+                
+                all_answers = incorrect + [correct]
+                random.shuffle(all_answers)
+                correct_index = all_answers.index(correct)
+                correct_letter = ["A", "B", "C", "D"][correct_index]
+                
+                opts = [f"A) {all_answers[0]}", f"B) {all_answers[1]}", f"C) {all_answers[2]}", f"D) {all_answers[3]}"]
+                questions.append({"q": q_text_ar, "opts": opts, "ans": correct_letter})
+            return questions
+    except Exception as e:
+        print(f"Error fetching questions: {e}")
+    
+    # في حال انقطاع الإنترنت عن السيرفر، نرجع أسئلة بسيطة جداً كخطة طوارئ
+    return [{"q": "حدث خطأ في جلب الأسئلة من الإنترنت، يرجى إعادة المحاولة.", "opts": ["A) موافق", "B) موافق", "C) موافق", "D) موافق"], "ans": "A"}]
 
 QUESTIONS = fetch_questions()
 current_q_index = 0
@@ -48,9 +69,10 @@ async def next_q():
     current_q_index += 1
     await asyncio.sleep(3)
     
+    # إذا انتهت الـ 10 أسئلة، نجلب 10 أسئلة جديدة تلقائياً
     if current_q_index >= len(QUESTIONS):
-        print("🔄 إعادة خلط الأسئلة...")
-        random.shuffle(QUESTIONS)
+        print("🔄 جلب دفعة جديدة من الأسئلة...")
+        QUESTIONS = fetch_questions()
         current_q_index = 0
         
     if len(QUESTIONS) > 0:
@@ -72,7 +94,6 @@ async def process_answer(user_name, answer):
         return
         
     current_ans = QUESTIONS[current_q_index]["ans"]
-    # التحقق من الإجابة (سواء من الأزرار أو التعليقات)
     if answer.strip().upper() == current_ans:
         winner_found = True
         if timer_task:
@@ -93,12 +114,11 @@ async def process_answer(user_name, answer):
 def on_chat(e):
     comment = e['comment'].strip().upper()
     user = e['user'].get('nickname', e['user']['uniqueId'])
-    # إرسال التعليق للتحقق فوراً
     asyncio.run_coroutine_threadsafe(process_answer(user, comment), main_loop)
 
 async def websocket_handler(request):
     global main_loop, timer_task
-    ws = web.WebSocketResponse(heartbeat=15) # إضافة نبضات حياة لمنع الانقطاع
+    ws = web.WebSocketResponse(heartbeat=15) 
     await ws.prepare(request)
     clients.add(ws)
     
@@ -135,7 +155,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 الخادم جاهز على المنفذ {port} مع نبضات حياة وإعادة اتصال")
+    print(f"🚀 الخادم جاهز على المنفذ {port} (جلب أونلاين مستمر)")
     await asyncio.Future()
 
 if __name__ == "__main__":
